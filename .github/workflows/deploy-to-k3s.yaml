@@ -5,7 +5,7 @@ name: Build Image & Deploy to K3s
 on:
   # 条件1：master分支有push/merge操作（自动触发）
   push:
-    branches: [ master ]
+    branches: [ main ]
     # 排除仅修改文档的提交（可选，减少无用触发）
     paths-ignore:
       - '**.md'
