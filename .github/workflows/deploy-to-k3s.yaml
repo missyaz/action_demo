@@ -1,0 +1,91 @@
+# Workflow名称
+name: Build Image & Deploy to K3s
+
+# 触发条件：满足以下任一条件即执行
+on:
+  # 条件1：master分支有push/merge操作（自动触发）
+  push:
+    branches: [ master ]
+    # 排除仅修改文档的提交（可选，减少无用触发）
+    paths-ignore:
+      - '**.md'
+      - '**.txt'
+  # 条件2：手动创建并推送Tag（如v1.0.0，手动触发正式版）
+  create:
+    tags: [ 'v*' ]  # 匹配所有以v开头的Tag，如v1.0.0、v1.1.0-beta
+
+# 执行的任务
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # 步骤按顺序执行
+    steps:
+      # 步骤1：检出GitHub仓库代码（必须，否则无法访问Dockerfile/部署文件）
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      # 步骤2：安装kubectl（用于操作K3s集群）
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+
+      # 步骤3：配置K3s的kubeconfig（从GitHub秘钥读取，加密安全）
+      - name: Configure K3s Kubeconfig
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config  # kubectl要求kubeconfig权限为600，否则报错
+
+      # 步骤4：设置镜像标签（区分自动触发和手动打Tag触发）
+      - name: Set Image Tag
+        id: set_tag
+        run: |
+          # 判断是否为打Tag触发：如果是，镜像标签为Tag名；否则为commit SHA值（唯一标识）
+          if [[ "${{ github.event_name }}" == "create" && "${{ github.ref }}" =~ ^refs/tags/ ]]; then
+            IMAGE_TAG=${{ github.ref_name }}  # 如v1.0.0
+          else
+            IMAGE_TAG=${{ github.sha }}  # 如a1b2c3d4（commit的唯一哈希）
+          fi
+          # 输出镜像标签，供后续步骤使用
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          # 输出完整镜像地址，供后续步骤使用
+          ACR_IMAGE="${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/demo-k3s-app:$IMAGE_TAG"
+          echo "ACR_IMAGE=$ACR_IMAGE" >> $GITHUB_OUTPUT
+
+      # 步骤5：登录阿里云ACR（用于推送镜像）
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USER }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      # 步骤6：构建Docker镜像并推送到阿里云ACR
+      - name: Build & Push Image to Aliyun ACR
+        run: |
+          # 构建镜像（使用步骤4输出的完整镜像地址）
+          docker build -t ${{ steps.set_tag.outputs.ACR_IMAGE }} .
+          # 推送镜像到阿里云ACR
+          docker push ${{ steps.set_tag.outputs.ACR_IMAGE }}
+
+      # 步骤7：替换k3s部署文件中的占位符（镜像地址+镜像标签）
+      - name: Replace Placeholder in K3s Deployment File
+        run: |
+          # 替换镜像地址占位符
+          sed -i "s|ACR_IMAGE_PLACEHOLDER|${{ steps.set_tag.outputs.ACR_IMAGE }}|g" k8s/deployment.yaml
+          # 替换镜像标签占位符（传递给应用，用于验证）
+          sed -i "s|IMAGE_TAG_PLACEHOLDER|${{ steps.set_tag.outputs.IMAGE_TAG }}|g" k8s/deployment.yaml
+
+      # 步骤8：部署到K3s集群并重启应用（确保拉取新镜像）
+      - name: Deploy to K3s Cluster
+        run: |
+          # 应用部署文件到K3s
+          kubectl apply -f k8s/deployment.yaml
+          # 重启Deployment，强制K3s拉取新镜像并更新Pod
+          kubectl rollout restart deployment demo-k3s-app -n default
+
+      # 步骤9：验证部署结果（可选，输出Pod状态，方便排查问题）
+      - name: Verify Deployment Status
+        run: |
+          echo "===== Pod Status ====="
+          kubectl get pods -n default -l app=demo-k3s-app
+          echo "===== Service Status ====="
+          kubectl get svc -n default -l app=demo-k3s-app
