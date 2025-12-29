@@ -28,11 +28,15 @@ jobs:
       - name: Install kubectl
         uses: azure/setup-kubectl@v3
 
-      # 步骤3：配置K3s的kubeconfig（从GitHub秘钥读取，加密安全）
+      # 步骤3：配置K3s的kubeconfig（修复目录不存在问题）
       - name: Configure K3s Kubeconfig
         run: |
+          # 关键新增：创建 .kube 目录（-p 确保目录不存在时创建，存在时不报错）
+          mkdir -p ~/.kube
+          # 写入 kubeconfig 文件
           echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
-          chmod 600 ~/.kube/config  # kubectl要求kubeconfig权限为600，否则报错
+          # 配置文件权限（kubectl 要求 config 文件权限为 600，否则报错）
+          chmod 600 ~/.kube/config
 
       # 步骤4：设置镜像标签（区分自动触发和手动打Tag触发）
       - name: Set Image Tag
