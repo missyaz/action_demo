@@ -42,4 +42,4 @@ spec:
   ports:
   - port: 80
     targetPort: 80
-    nodePort: 30080  # K3s节点端口，可自定义（30000-32767之间）
+    nodePort: 32080  # K3s节点端口，可自定义（30000-32767之间）
